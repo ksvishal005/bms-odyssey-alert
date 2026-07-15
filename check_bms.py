@@ -40,7 +40,7 @@ def send_telegram_photo(message: str, photo_path: Path):
 
 
 def page_looks_bookable(page) -> bool:
-    text = page.locator("body").inner_text(timeout=15000).lower()
+    body_text = page.locator("body").inner_text(timeout=15000).lower()
 
     closed_signals = [
         "no shows available",
@@ -48,32 +48,24 @@ def page_looks_bookable(page) -> bool:
         "sorry, no shows available",
         "coming soon",
         "not available",
+        "no showtimes available",
     ]
 
-    if any(signal in text for signal in closed_signals):
+    if any(signal in body_text for signal in closed_signals):
         return False
 
-    bookable_signals = [
-        "pvr",
-        "inox",
-        "sathyam",
-        "escape",
-        "palazzo",
-        "luxe",
-        "ags",
-        "rohini",
-        "kamala",
-        "devi",
-        "mayajaal",
-        "jazz",
-        "book",
-        "available",
-        "fast filling",
-        "non-cancellable",
-        "cancellation available",
-    ]
+    # Real showtime buttons usually look like 09:30 AM, 10:45 PM, etc.
+    time_buttons = page.locator(
+        "text=/\\b(0?[1-9]|1[0-2]):[0-5][0-9]\\s?(AM|PM)\\b/i"
+    )
 
-    return any(signal in text for signal in bookable_signals)
+    count = time_buttons.count()
+    print(f"Detected showtime-like buttons/text count: {count}")
+
+    if count >= 1:
+        return True
+
+    return False
 
 
 def main():
