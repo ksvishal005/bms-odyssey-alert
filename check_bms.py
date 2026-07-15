@@ -1,10 +1,10 @@
 import os
-import sys
 import requests
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-BMS_URL = "https://in.bookmyshow.com/movies/chennai/the-odyssey/buytickets/ET00480917/20260720"
+START_URL = "https://in.bookmyshow.com/movies/chennai/the-odyssey/buytickets/ET00480917/20260719"
+TARGET_DATE_URL_PART = "20260720"
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -14,7 +14,7 @@ SCREENSHOT_PATH = Path("bms_odyssey_20_july.png")
 
 def send_telegram_message(message: str):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(
+    response = requests.post(
         url,
         data={
             "chat_id": CHAT_ID,
@@ -22,25 +22,42 @@ def send_telegram_message(message: str):
             "disable_web_page_preview": False,
         },
         timeout=20,
-    ).raise_for_status()
+    )
+    response.raise_for_status()
 
 
 def send_telegram_photo(message: str, photo_path: Path):
+    if not photo_path.exists() or photo_path.stat().st_size == 0:
+        send_telegram_message(message)
+        return
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+
     with photo_path.open("rb") as photo:
-        requests.post(
+        response = requests.post(
             url,
             data={
                 "chat_id": CHAT_ID,
                 "caption": message,
             },
-            files={"photo": photo},
+            files={
+                "photo": ("bms_odyssey_20_july.png", photo, "image/png")
+            },
             timeout=30,
-        ).raise_for_status()
+        )
+
+    if response.status_code != 200:
+        send_telegram_message(message)
+        return
+
+    response.raise_for_status()
 
 
-def page_looks_bookable(page) -> bool:
-    body_text = page.locator("body").inner_text(timeout=15000).lower()
+def has_showtimes(page) -> bool:
+    try:
+        body_text = page.locator("body").inner_text(timeout=15000).lower()
+    except Exception:
+        return False
 
     closed_signals = [
         "no shows available",
@@ -54,23 +71,20 @@ def page_looks_bookable(page) -> bool:
     if any(signal in body_text for signal in closed_signals):
         return False
 
-    # Real showtime buttons usually look like 09:30 AM, 10:45 PM, etc.
-    time_buttons = page.locator(
-        "text=/\\b(0?[1-9]|1[0-2]):[0-5][0-9]\\s?(AM|PM)\\b/i"
-    )
-
-    count = time_buttons.count()
-    print(f"Detected showtime-like buttons/text count: {count}")
-
-    if count >= 1:
-        return True
-
-    return False
+    # Detect actual showtime text like 09:30 AM, 7:15 PM, etc.
+    try:
+        time_slots = page.locator(
+            "text=/\\b(0?[1-9]|1[0-2]):[0-5][0-9]\\s?(AM|PM)\\b/i"
+        )
+        return time_slots.count() > 0
+    except Exception:
+        return False
 
 
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+
         context = browser.new_context(
             viewport={"width": 1366, "height": 900},
             user_agent=(
@@ -82,29 +96,59 @@ def main():
 
         page = context.new_page()
 
-        print(f"Opening: {BMS_URL}")
-        page.goto(BMS_URL, wait_until="domcontentloaded", timeout=60000)
-
         try:
-            page.wait_for_load_state("networkidle", timeout=20000)
-        except Exception:
-            print("Network idle timeout; continuing anyway.")
+            page.goto(START_URL, wait_until="domcontentloaded", timeout=60000)
 
-        page.wait_for_timeout(5000)
-        page.screenshot(path=str(SCREENSHOT_PATH), full_page=True)
+            try:
+                page.wait_for_load_state("networkidle", timeout=20000)
+            except Exception:
+                pass
 
-        if page_looks_bookable(page):
-            message = (
-                "🚨 ODYSSEY BOOKING MAY BE OPEN!\n\n"
-                "20 July 2026 shows seem to be visible/bookable on BookMyShow.\n\n"
-                f"Book now:\n{BMS_URL}"
+            page.wait_for_timeout(5000)
+
+            # Find visible 20 July date tile.
+            date_tile = page.locator("text=/\\b20\\b/").first()
+
+            if date_tile.count() == 0:
+                print("not open")
+                browser.close()
+                return
+
+            try:
+                date_tile.click(timeout=5000)
+                page.wait_for_timeout(5000)
+            except Exception:
+                print("not open")
+                browser.close()
+                return
+
+            current_url = page.url
+
+            page.screenshot(path=str(SCREENSHOT_PATH), full_page=True)
+
+            booking_open = (
+                TARGET_DATE_URL_PART in current_url
+                or has_showtimes(page)
             )
-            send_telegram_message(message)
-            print("Booking appears open. Telegram alert sent.")
-            sys.exit(0)
 
-        print("Still not open / no bookable show detected.")
-        browser.close()
+            if booking_open:
+                message = (
+                    "🚨🚨🚨 BOOKING OPEN 🚨🚨🚨\n\n"
+                    "ODYSSEY 20 JULY TICKETS MAY BE OPEN!\n\n"
+                    "BOOK IMMEDIATELY:\n"
+                    f"{current_url}"
+                )
+
+                send_telegram_photo(message, SCREENSHOT_PATH)
+                print("BOOKING OPEN")
+            else:
+                print("not open")
+
+        except Exception:
+            print("not open")
+
+        finally:
+            browser.close()
 
 
 if __name__ == "__main__":
