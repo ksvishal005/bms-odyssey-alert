@@ -107,7 +107,7 @@ def main():
                 "20 July 2026 shows seem to be visible/bookable on BookMyShow.\n\n"
                 f"Book now:\n{BMS_URL}"
             )
-            send_telegram_photo(message, SCREENSHOT_PATH)
+            send_telegram_message(message)
             print("Booking appears open. Telegram alert sent.")
             sys.exit(0)
 
